@@ -1,10 +1,11 @@
 CFLAGS += $(shell pkgconf --cflags readline) -Wall
 LDFLAGS += $(shell pkgconf --libs readline)
 
-mpc/build/libmpc.so:
-	cd mpc && $(MAKE) libs
+all: main
 
-libs/libmpc.so: mpc/build/libmpc.so
-	ln -sf '$(CURDIR)/$<' '$(CURDIR)/$@'
+mpc/build/libmpc.a:
+	cd mpc && $(MAKE) build/libmpc.a
 
-main: main.o libs/libmpc.so
+main: main.o mpc/build/libmpc.a
+
+jsong: jsong.o mpc/build/libmpc.a
