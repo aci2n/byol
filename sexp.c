@@ -206,7 +206,11 @@ static lval *lval_pop(lval *v, size_t i) {
   lval *c = v->cell[i];
   memmove(&v->cell[i], &v->cell[i + 1], sizeof(*v->cell) * (v->count - i - 1));
   v->count--;
-  v->cell = realloc(v->cell, sizeof(*c->cell) * v->count);
+  if (v->count > 0) {
+    v->cell = realloc(v->cell, sizeof(*c->cell) * v->count);
+  } else {
+    v->cell = 0;
+  }
   return c;
 }
 
