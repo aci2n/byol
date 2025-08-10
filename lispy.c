@@ -19,6 +19,7 @@ static lval *lval_take(lval *, size_t);
 static lval *lval_read(mpc_ast_t *);
 static void lval_delete(lval *);
 static void lval_print(lval *);
+static lval *lval_copy(lval *);
 static bool streq(char *, char *);
 static lenv *lenv_new();
 static lenv *lenv_copy(lenv *);
@@ -291,6 +292,18 @@ static lval *lval_join(lval *x, lval *y) {
   return x;
 }
 
+static lval *lval_call(lenv *e, lval *f, lval *a) {
+  if (f->builtin) {
+    return f->builtin(e, a);
+  }
+  for (size_t i = 0; i < f->formals->count; i++) {
+    lenv_put(f->env, f->formals->cell[i], a->cell[i]);
+  }
+  lval_delete(a);
+  f->env->par = e;
+  return builtin_eval(f->env, lval_add(lval_sexp(), lval_copy(f->body)));
+}
+
 static lval *builtin_join(lenv *e, lval *v) {
   for (size_t i = 0; i < v->count; i++) {
     LASSERT_TYPE("join", v, i, LTYPE_QEXP);
@@ -345,7 +358,7 @@ static lval *builtin_lambda(lenv *e, lval *v) {
   }
 
   lval *formals = lval_pop(v, 0);
-  lval *body = lval_pop(v, 1);
+  lval *body = lval_pop(v, 0);
   lval_delete(v);
   return lval_lambda(formals, body);
 }
@@ -390,7 +403,7 @@ static lval *lval_eval_sexp(lenv *e, lval *v) {
     lval_delete(f);
     return lval_err("Not a function: %s", ltype_name(f->type));
   }
-  lval *ret = f->builtin(e, v);
+  lval *ret = lval_call(e, f, v);
   lval_delete(f);
   return ret;
 }
@@ -617,6 +630,7 @@ static void lenv_add_builtins(lenv *e) {
   lenv_add_builtin(e, "eval", builtin_eval);
   lenv_add_builtin(e, "join", builtin_join);
   lenv_add_builtin(e, "def", builtin_def);
+  lenv_add_builtin(e, "\\", builtin_lambda);
   lenv_add_builtin(e, "=", builtin_put);
   lenv_add_builtin(e, "+", builtin_add);
   lenv_add_builtin(e, "-", builtin_sub);
