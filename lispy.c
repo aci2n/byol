@@ -25,6 +25,7 @@ static lenv *lenv_copy(lenv *);
 static void lenv_delete(lenv *);
 static lval *lenv_get(lenv *, lval *);
 static void lenv_put(lenv *, lval *, lval *);
+static void lenv_def(lenv *, lval *, lval *);
 
 enum ltype {
   LTYPE_NUM,
@@ -36,6 +37,7 @@ enum ltype {
 };
 
 struct lenv {
+  lenv *par;
   size_t count;
   char **syms;
   lval **vals;
@@ -301,24 +303,34 @@ static lval *builtin_join(lenv *e, lval *v) {
   return x;
 }
 
-static lval *builtin_def(lenv *e, lval *v) {
-  LASSERT(v, v->count > 0, "no args for 'def'");
-  LASSERT_TYPE("def", v, 0, LTYPE_QEXP);
+static lval *builtin_var(lenv *e, lval *v, char *fn) {
+  LASSERT(v, v->count > 0, "no args for '%s'", fn);
+  LASSERT_TYPE(fn, v, 0, LTYPE_QEXP);
   lval *symlist = v->cell[0];
   for (size_t i = 0; i < symlist->count; i++) {
     LASSERT(v, symlist->cell[i]->type == LTYPE_SYM,
-            "first 'def' arg must be a list of symbols, got %s at %zu",
+            "first '%s' arg must be a list of symbols, got %s at %zu", fn,
             ltype_name(symlist->cell[i]->type), i);
   }
   LASSERT(v, symlist->count == v->count - 1,
-          "'def' expected exactly %zu values, got %zu", symlist->count,
+          "'%s' expected exactly %zu values, got %zu", symlist->count, fn,
           v->count - 1);
   for (size_t i = 0; i < symlist->count; i++) {
-    lenv_put(e, symlist->cell[i], v->cell[i + 1]);
+    if (streq(fn, "def")) {
+      lenv_def(e, symlist->cell[i], v->cell[i + 1]);
+    } else if (streq(fn, "=")) {
+      lenv_put(e, symlist->cell[i], v->cell[i + 1]);
+    } else {
+      exit(1);
+    }
   }
   lval_delete(v);
   return lval_sexp();
 }
+
+static lval *builtin_def(lenv *e, lval *v) { return builtin_var(e, v, "def"); }
+
+static lval *builtin_put(lenv *e, lval *v) { return builtin_var(e, v, "="); }
 
 static lval *builtin_lambda(lenv *e, lval *v) {
   LASSERT_NUM("\\", v, 2);
@@ -528,6 +540,7 @@ static lenv *lenv_new() {
 
 static lenv *lenv_copy(lenv *e) {
   lenv *c = lenv_new();
+  *c = (lenv){.par = e->par};
   for (size_t i = 0; i < e->count; i++) {
     lenv_put(c, lval_sym(e->syms[i]), e->vals[i]);
   }
@@ -559,6 +572,9 @@ static lval *lenv_get(lenv *e, lval *k) {
       return lval_copy(e->vals[i]);
     }
   }
+  if (e->par) {
+    return lenv_get(e->par, k);
+  }
   return lval_err("Unbound symbol %s", k->sym);
 }
 
@@ -579,6 +595,13 @@ static void lenv_put(lenv *e, lval *k, lval *v) {
   e->vals[e->count - 1] = lval_copy(v);
 }
 
+static void lenv_def(lenv *e, lval *k, lval *v) {
+  while (e->par) {
+    e = e->par;
+  }
+  lenv_put(e, k, v);
+}
+
 static void lenv_add_builtin(lenv *e, char *name, lbuiltin fun) {
   lval *k = lval_sym(name);
   lval *v = lval_fun(fun);
@@ -594,6 +617,7 @@ static void lenv_add_builtins(lenv *e) {
   lenv_add_builtin(e, "eval", builtin_eval);
   lenv_add_builtin(e, "join", builtin_join);
   lenv_add_builtin(e, "def", builtin_def);
+  lenv_add_builtin(e, "=", builtin_put);
   lenv_add_builtin(e, "+", builtin_add);
   lenv_add_builtin(e, "-", builtin_sub);
   lenv_add_builtin(e, "*", builtin_mul);
