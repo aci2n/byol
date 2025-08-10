@@ -165,6 +165,10 @@ static lval *builtin_join(lval *v) {
 }
 
 static lval *builtin_op(lval *v, char *op) {
+  if (v->count == 0) {
+    lval_delete(v);
+		return lval_err("empty");
+	}
   for (size_t i = 0; i < v->count; i++) {
     if (v->cell[i]->type != LTYPE_NUM) {
       lval_delete(v);
@@ -208,7 +212,8 @@ static lval *lval_pop(lval *v, size_t i) {
   v->count--;
   if (v->count > 0) {
     v->cell = realloc(v->cell, sizeof(*c->cell) * v->count);
-  } else {
+  } else  {
+		free(v->cell);
     v->cell = 0;
   }
   return c;
@@ -244,6 +249,10 @@ static lval *builtin(lval *v, char *op) {
 }
 
 static lval *lval_eval_sexp(lval *v) {
+  if (v->count == 0) {
+		lval_delete(v);
+		return lval_err("empty");
+	}
   for (size_t i = 0; i < v->count; i++) {
     v->cell[i] = lval_eval(v->cell[i]);
   }
