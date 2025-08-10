@@ -9,6 +9,7 @@
 typedef struct lval lval;
 typedef enum ltype ltype;
 static lval *lval_eval(lval *);
+static lval *lval_add(lval *, lval *);
 static lval *lval_pop(lval *, size_t);
 static lval *lval_take(lval *, size_t);
 static lval *lval_read(mpc_ast_t *);
@@ -104,6 +105,65 @@ static void lval_delete(lval *val) {
   }
 }
 
+#define LASSERT(args, cond, err)                                               \
+  if (!(cond)) {                                                               \
+    lval_delete(args);                                                         \
+    return lval_err(err);                                                      \
+  }
+
+static lval *builtin_head(lval *v) {
+  LASSERT(v, v->count == 1, "headargs");
+  LASSERT(v, v->cell[0]->type == LTYPE_QEXP, "headtype");
+  LASSERT(v, v->cell[0]->count != 0, "headempty");
+  lval *x = lval_take(v, 0);
+  while (x->count > 1) {
+    lval_delete(lval_pop(x, 1));
+  }
+  return x;
+}
+
+static lval *builtin_tail(lval *v) {
+  LASSERT(v, v->count == 1, "tailargs");
+  LASSERT(v, v->cell[0]->type == LTYPE_QEXP, "tailtype");
+  LASSERT(v, v->cell[0]->count != 0, "tailempty");
+  lval *x = lval_take(v, 0);
+  lval_delete(lval_pop(x, 0));
+  return x;
+}
+
+static lval *builtin_list(lval *v) {
+  v->type = LTYPE_QEXP;
+  return v;
+}
+
+static lval *builtin_eval(lval *v) {
+  LASSERT(v, v->count == 1, "evalargs");
+  LASSERT(v, v->cell[0]->type == LTYPE_QEXP, "evaltype");
+  lval *x = lval_take(v, 0);
+  x->type = LTYPE_SEXP;
+  return lval_eval(x);
+}
+
+static lval *lval_join(lval *x, lval *y) {
+  while (y->count > 0) {
+    x = lval_add(x, lval_pop(y, 0));
+  }
+  lval_delete(y);
+  return x;
+}
+
+static lval *builtin_join(lval *v) {
+  for (size_t i = 0; i < v->count; i++) {
+    LASSERT(v, v->cell[i]->type == LTYPE_QEXP, "jointype");
+  }
+  lval *x = lval_pop(v, 0);
+  while (v->count > 0) {
+    x = lval_join(x, lval_pop(v, 0));
+  }
+  lval_delete(v);
+  return x;
+}
+
 static lval *builtin_op(lval *v, char *op) {
   for (size_t i = 0; i < v->count; i++) {
     if (v->cell[i]->type != LTYPE_NUM) {
@@ -156,6 +216,29 @@ static lval *lval_take(lval *v, size_t i) {
   return c;
 }
 
+static lval *builtin(lval *v, char *op) {
+  if (streq(op, "list")) {
+    return builtin_list(v);
+  }
+  if (streq(op, "head")) {
+    return builtin_head(v);
+  }
+  if (streq(op, "tail")) {
+    return builtin_tail(v);
+  }
+  if (streq(op, "join")) {
+    return builtin_join(v);
+  }
+  if (streq(op, "eval")) {
+    return builtin_eval(v);
+  }
+  if (strstr("+-/*", op) != 0) {
+    return builtin_op(v, op);
+  }
+  lval_delete(v);
+  return lval_err("unknownfun");
+}
+
 static lval *lval_eval_sexp(lval *v) {
   for (size_t i = 0; i < v->count; i++) {
     v->cell[i] = lval_eval(v->cell[i]);
@@ -171,7 +254,7 @@ static lval *lval_eval_sexp(lval *v) {
     lval_delete(s);
     return lval_err("nosym");
   }
-  lval *ret = builtin_op(v, s->sym);
+  lval *ret = builtin(v, s->sym);
   lval_delete(s);
   return ret;
 }
@@ -268,10 +351,11 @@ int main(int argc, char **argv) {
 
   mpca_lang(MPCA_LANG_DEFAULT,
             "number: /-?[0-9]+/ ;\n"
-            "symbol: '+' | '-' | '*' | '/' ;\n"
+            "symbol: \"list\" | \"head\" | \"tail\" | \"join\" | \"eval\" | "
+            "'+' | '-' | '*' | '/' ;\n"
             "sexp: '(' <expr>* ')' ;\n"
             "qexp: '{' <expr>* '}' ;\n"
-            "expr: <number> | <symbol> | <sexp> | <qexp>;\n"
+            "expr: <number> | <symbol> | <sexp> | <qexp> ;\n"
             "lispy: /^/ <expr>* /$/ ;\n",
             Number, Symbol, Sexp, Qexp, Expr, Lispy);
 
@@ -286,10 +370,10 @@ int main(int argc, char **argv) {
       lval_print(v);
       printf("\n");
 
-      /* lval *e = lval_eval(v); */
-      /* lval_print(e); */
-      /* printf("\n"); */
-      lval_delete(v);
+      lval *e = lval_eval(v);
+      lval_print(e);
+      printf("\n");
+      lval_delete(e);
 
       mpc_ast_delete(a);
     } else {
