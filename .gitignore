@@ -2,4 +2,4 @@
 *.so
 main
 parsing
-sexp
+lispy
