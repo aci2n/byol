@@ -52,6 +52,25 @@ struct lval {
   };
 };
 
+static char *ltype_name(ltype t) {
+  switch (t) {
+  case LTYPE_NUM:
+    return "Number";
+  case LTYPE_SYM:
+    return "Symbol";
+  case LTYPE_FUN:
+    return "Function";
+  case LTYPE_ERR:
+    return "Error";
+  case LTYPE_SEXP:
+    return "S-Expression";
+  case LTYPE_QEXP:
+    return "Q-Expression";
+  default:
+    return "Unknown";
+  }
+}
+
 static bool has_tag(mpc_ast_t *a, char *tag) {
   /* printf("has_tag(%s, %s)\n", a->tag, tag); */
   char *pos = strstr(a->tag, tag);
@@ -74,9 +93,17 @@ static lval *lval_num(long val) {
   return ret;
 }
 
-static lval *lval_err(char *err) {
+static lval *lval_err(char *fmt, ...) {
   lval *ret = malloc(sizeof(lval));
+  char err[512] = {0};
+  va_list va = {0};
+
+  va_start(va, fmt);
+  vsnprintf(err, sizeof(err) - 1, fmt, va);
+  va_end(va);
+
   *ret = (lval){.type = LTYPE_ERR, .err = strdup(err)};
+
   return ret;
 }
 
@@ -127,21 +154,24 @@ static void lval_delete(lval *val) {
   }
 }
 
-#define LASSERT(args, cond, err)                                               \
+#define LASSERT(args, cond, fmt, ...)                                          \
   if (!(cond)) {                                                               \
+    lval *err = lval_err(fmt, ##__VA_ARGS__);                                  \
     lval_delete(args);                                                         \
-    return lval_err(err);                                                      \
+    return err;                                                                \
   }
 
 static lval *builtin_op(lenv *e, lval *v, char *op) {
   if (v->count == 0) {
     lval_delete(v);
-    return lval_err("empty");
+    return lval_err("No args for %s", op);
   }
+
   for (size_t i = 0; i < v->count; i++) {
     if (v->cell[i]->type != LTYPE_NUM) {
+      lval *err = lval_err("Not a number: %s", ltype_name(v->cell[i]->type));
       lval_delete(v);
-      return lval_err("nan");
+      return err;
     }
   }
 
@@ -165,7 +195,7 @@ static lval *builtin_op(lenv *e, lval *v, char *op) {
         lval_delete(y);
         lval_delete(x);
         lval_delete(v);
-        return lval_err("zerodiv");
+        return lval_err("Division by zero: %ld/%ld", x->num, y->num);
       }
       x->num /= y->num;
     }
@@ -181,9 +211,10 @@ static lval *builtin_mul(lenv *e, lval *v) { return builtin_op(e, v, "*"); }
 static lval *builtin_div(lenv *e, lval *v) { return builtin_op(e, v, "/"); }
 
 static lval *builtin_head(lenv *e, lval *v) {
-  LASSERT(v, v->count == 1, "headargs");
-  LASSERT(v, v->cell[0]->type == LTYPE_QEXP, "headtype");
-  LASSERT(v, v->cell[0]->count != 0, "headempty");
+  LASSERT(v, v->count == 1, "'head' takes exactly 1 arg, got %zu", v->count);
+  LASSERT(v, v->cell[0]->type == LTYPE_QEXP, "'head' takes a qexp, got %s",
+          ltype_name(v->cell[0]->type));
+  LASSERT(v, v->cell[0]->count != 0, "empty list for 'head'");
   lval *x = lval_take(v, 0);
   while (x->count > 1) {
     lval_delete(lval_pop(x, 1));
@@ -192,9 +223,10 @@ static lval *builtin_head(lenv *e, lval *v) {
 }
 
 static lval *builtin_tail(lenv *e, lval *v) {
-  LASSERT(v, v->count == 1, "tailargs");
-  LASSERT(v, v->cell[0]->type == LTYPE_QEXP, "tailtype");
-  LASSERT(v, v->cell[0]->count != 0, "tailempty");
+  LASSERT(v, v->count == 1, "'tail' takes exactly 1 arg, got %zu", v->count);
+  LASSERT(v, v->cell[0]->type == LTYPE_QEXP, "'tail' takes a qexp, got %s",
+          ltype_name(v->cell[0]->type));
+  LASSERT(v, v->cell[0]->count != 0, "empty list for 'tail'");
   lval *x = lval_take(v, 0);
   lval_delete(lval_pop(x, 0));
   return x;
@@ -206,8 +238,9 @@ static lval *builtin_list(lenv *e, lval *v) {
 }
 
 static lval *builtin_eval(lenv *e, lval *v) {
-  LASSERT(v, v->count == 1, "evalargs");
-  LASSERT(v, v->cell[0]->type == LTYPE_QEXP, "evaltype");
+  LASSERT(v, v->count == 1, "'eval' takes exactly 1 arg, got %zu", v->count);
+  LASSERT(v, v->cell[0]->type == LTYPE_QEXP, "'eval' takes a qexp, got %s",
+          ltype_name(v->cell[0]->type));
   lval *x = lval_take(v, 0);
   x->type = LTYPE_SEXP;
   return lval_eval(e, x);
@@ -223,7 +256,9 @@ static lval *lval_join(lval *x, lval *y) {
 
 static lval *builtin_join(lenv *e, lval *v) {
   for (size_t i = 0; i < v->count; i++) {
-    LASSERT(v, v->cell[i]->type == LTYPE_QEXP, "jointype");
+    LASSERT(v, v->cell[i]->type == LTYPE_QEXP,
+            "'join' only takes qexps, got %s at %zu",
+            ltype_name(v->cell[i]->type), i);
   }
   lval *x = lval_pop(v, 0);
   while (v->count > 0) {
@@ -234,13 +269,19 @@ static lval *builtin_join(lenv *e, lval *v) {
 }
 
 static lval *builtin_def(lenv *e, lval *v) {
-  LASSERT(v, v->count > 0, "defempty");
+  LASSERT(v, v->count > 0, "no args for 'def'");
   lval *symlist = v->cell[0];
-  LASSERT(v, symlist->type == LTYPE_QEXP, "deftype");
+  LASSERT(v, symlist->type == LTYPE_QEXP,
+          "first arg for 'def' must be a qexp, got %s",
+          ltype_name(symlist->type));
   for (size_t i = 0; i < symlist->count; i++) {
-    LASSERT(v, symlist->cell[i]->type == LTYPE_SYM, "defnotasym");
+    LASSERT(v, symlist->cell[i]->type == LTYPE_SYM,
+            "first 'def' must be a list of symbols, got %s at %zu",
+            ltype_name(symlist->cell[i]->type), i);
   }
-  LASSERT(v, symlist->count == v->count - 1, "defcount");
+  LASSERT(v, symlist->count == v->count - 1,
+          "'def' expected exactly %zu values, got %zu", symlist->count,
+          v->count - 1);
   for (size_t i = 0; i < symlist->count; i++) {
     lenv_put(e, symlist->cell[i], v->cell[i + 1]);
   }
@@ -286,7 +327,7 @@ static lval *lval_eval_sexp(lenv *e, lval *v) {
   if (f->type != LTYPE_FUN) {
     lval_delete(v);
     lval_delete(f);
-    return lval_err("nofun");
+    return lval_err("Not a function: %s", ltype_name(f->type));
   }
   lval *ret = f->fun(e, v);
   lval_delete(f);
@@ -378,7 +419,7 @@ static lval *lval_read_num(mpc_ast_t *a) {
   errno = 0;
   long num = strtol(a->contents, 0, 10);
   if (errno == EINVAL || errno == ERANGE) {
-    return lval_err("nan");
+    return lval_err("Not a number: %s", a->contents);
   }
   return lval_num(num);
 }
@@ -440,14 +481,14 @@ static void lenv_delete(lenv *e) {
 
 static lval *lenv_get(lenv *e, lval *k) {
   if (k->type != LTYPE_SYM) {
-    return lval_err("notasym");
+    return lval_err("Not a symbol: %s", ltype_name(k->type));
   }
   for (size_t i = 0; i < e->count; i++) {
     if (streq(e->syms[i], k->sym)) {
       return lval_copy(e->vals[i]);
     }
   }
-  return lval_err("unboundsym");
+  return lval_err("Unbound symbol %s", k->sym);
 }
 
 static void lenv_put(lenv *e, lval *k, lval *v) {
@@ -481,7 +522,7 @@ static void lenv_add_builtins(lenv *e) {
   lenv_add_builtin(e, "tail", builtin_tail);
   lenv_add_builtin(e, "eval", builtin_eval);
   lenv_add_builtin(e, "join", builtin_join);
-	lenv_add_builtin(e, "def", builtin_def);
+  lenv_add_builtin(e, "def", builtin_def);
   lenv_add_builtin(e, "+", builtin_add);
   lenv_add_builtin(e, "-", builtin_sub);
   lenv_add_builtin(e, "*", builtin_mul);
