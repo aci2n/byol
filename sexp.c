@@ -21,6 +21,7 @@ static void lval_delete(lval *);
 static void lval_print(lval *);
 static bool streq(char *, char *);
 static lval *lenv_get(lenv *, lval *);
+static void lenv_put(lenv *, lval *, lval *);
 
 enum ltype {
   LTYPE_NUM,
@@ -232,6 +233,21 @@ static lval *builtin_join(lenv *e, lval *v) {
   return x;
 }
 
+static lval *builtin_def(lenv *e, lval *v) {
+  LASSERT(v, v->count > 0, "defempty");
+  lval *symlist = v->cell[0];
+  LASSERT(v, symlist->type == LTYPE_QEXP, "deftype");
+  for (size_t i = 0; i < symlist->count; i++) {
+    LASSERT(v, symlist->cell[i]->type == LTYPE_SYM, "defnotasym");
+  }
+  LASSERT(v, symlist->count == v->count - 1, "defcount");
+  for (size_t i = 0; i < symlist->count; i++) {
+    lenv_put(e, symlist->cell[i], v->cell[i + 1]);
+  }
+  lval_delete(v);
+  return lval_sexp();
+}
+
 static lval *lval_pop(lval *v, size_t i) {
   lval *c = v->cell[i];
   memmove(&v->cell[i], &v->cell[i + 1], sizeof(*v->cell) * (v->count - i - 1));
@@ -340,7 +356,7 @@ static lval *lval_copy(lval *v) {
     ret->fun = v->fun;
     break;
   case LTYPE_SYM:
-    ret->sym = v->sym;
+    ret->sym = strdup(v->sym);
     break;
   case LTYPE_ERR:
     ret->err = v->err;
@@ -465,6 +481,7 @@ static void lenv_add_builtins(lenv *e) {
   lenv_add_builtin(e, "tail", builtin_tail);
   lenv_add_builtin(e, "eval", builtin_eval);
   lenv_add_builtin(e, "join", builtin_join);
+	lenv_add_builtin(e, "def", builtin_def);
   lenv_add_builtin(e, "+", builtin_add);
   lenv_add_builtin(e, "-", builtin_sub);
   lenv_add_builtin(e, "*", builtin_mul);
@@ -500,7 +517,7 @@ int main(int argc, char **argv) {
     if (mpc_parse("<stdin>", input, Lispy, &r)) {
       mpc_ast_t *a = r.output;
       lval *v = lval_read(a);
-			
+
       lval_print(v);
       printf("\n");
 
@@ -514,8 +531,6 @@ int main(int argc, char **argv) {
       mpc_err_print(r.error);
       mpc_err_delete(r.error);
     }
-
-    free(input);
   }
 
   lenv_delete(e);
